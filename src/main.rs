@@ -18,50 +18,15 @@ extern crate gfx;
 extern crate gfx_app;
 extern crate glutin;
 extern crate gfx_window_glutin;
+mod pipeline;
+mod scene;
+mod mesh;
 
 use cgmath::{Deg, Matrix4, Point3, Vector3};
 use gfx::{ texture, traits::FactoryExt, Device, Factory};
 use glutin::GlContext;
-
-mod scene;
-pub type ColorFormat = gfx::format::Rgba8;
-pub type DepthFormat = gfx::format::DepthStencil;
-
-// Declare the vertex format suitable for drawing,
-// as well as the constants used by the shaders
-// and the pipeline state object format.
-// Notice the use of FixedPoint.
-gfx_defines!{
-    vertex Vertex {
-        pos: [f32; 4] = "a_Pos",
-        tex_coord: [f32; 2] = "a_TexCoord",
-    }
-
-    constant Locals {
-        transform: [[f32; 4]; 4] = "u_Transform",
-    }
-
-    pipeline pipe {
-        vbuf: gfx::VertexBuffer<Vertex> = (),
-        transform: gfx::Global<[[f32; 4]; 4]> = "u_Transform",
-        locals: gfx::ConstantBuffer<Locals> = "Locals",
-        color: gfx::TextureSampler<[f32; 4]> = "t_Color",
-        out_color: gfx::RenderTarget<ColorFormat> = "Target0",
-        out_depth: gfx::DepthTarget<DepthFormat> =
-            gfx::preset::depth::LESS_EQUAL_WRITE,
-    }
-}
-
-
-impl Vertex {
-    fn new(p: [i8; 3], t: [i8; 2]) -> Vertex {
-        Vertex {
-            pos: [p[0] as f32, p[1] as f32, p[2] as f32, 1.0],
-            tex_coord: [t[0] as f32, t[1] as f32],
-        }
-    }
-}
-
+use pipeline::pso::{ColorFormat, DepthFormat};
+pub use pipeline::pso::{pipe, Locals, Vertex};
 
 fn default_view() -> Matrix4<f32> {
     Matrix4::look_at(
@@ -72,48 +37,6 @@ fn default_view() -> Matrix4<f32> {
 }
 
 pub fn main() {
-   let cube_verts = [
-    // top (0, 0, 1)
-    Vertex::new([-1, -1,  1], [0, 0]),
-    Vertex::new([ 1, -1,  1], [1, 0]),
-    Vertex::new([ 1,  1,  1], [1, 1]),
-    Vertex::new([-1,  1,  1], [0, 1]),
-    // bottom (0, 0, -1)
-    Vertex::new([-1,  1, -1], [1, 0]),
-    Vertex::new([ 1,  1, -1], [0, 0]),
-    Vertex::new([ 1, -1, -1], [0, 1]),
-    Vertex::new([-1, -1, -1], [1, 1]),
-    // right (1, 0, 0)
-    Vertex::new([ 1, -1, -1], [0, 0]),
-    Vertex::new([ 1,  1, -1], [1, 0]),
-    Vertex::new([ 1,  1,  1], [1, 1]),
-    Vertex::new([ 1, -1,  1], [0, 1]),
-    // left (-1, 0, 0)
-    Vertex::new([-1, -1,  1], [1, 0]),
-    Vertex::new([-1,  1,  1], [0, 0]),
-    Vertex::new([-1,  1, -1], [0, 1]),
-    Vertex::new([-1, -1, -1], [1, 1]),
-    // front (0, 1, 0)
-    Vertex::new([ 1,  1, -1], [1, 0]),
-    Vertex::new([-1,  1, -1], [0, 0]),
-    Vertex::new([-1,  1,  1], [0, 1]),
-    Vertex::new([ 1,  1,  1], [1, 1]),
-    // back (0, -1, 0)
-    Vertex::new([ 1, -1,  1], [0, 0]),
-    Vertex::new([-1, -1,  1], [1, 0]),
-    Vertex::new([-1, -1, -1], [1, 1]),
-    Vertex::new([ 1, -1, -1], [0, 1]),
-    ];
-
-    let cube_idx : &[u16] = &[
-        0,  1,  2,  2,  3,  0, // top
-        4,  5,  6,  6,  7,  4, // bottom
-        8,  9, 10, 10, 11,  8, // right
-        12, 13, 14, 14, 15, 12, // left
-        16, 17, 18, 18, 19, 16, // front
-        20, 21, 22, 22, 23, 20, // back
-    ];
-
     let mut events_loop = glutin::EventsLoop::new();
     let window_config = glutin::WindowBuilder::new()
         .with_title("Triangle example".to_string())
@@ -152,7 +75,7 @@ pub fn main() {
     let context = glutin::ContextBuilder::new()
         .with_gl(glutin::GlRequest::Specific(api, version))
         .with_vsync(true);
-    let (window, mut device, mut factory, main_color, mut main_depth) =
+    let (window, mut device, mut factory, main_color, main_depth) =
         gfx_window_glutin::init::<ColorFormat, DepthFormat>(window_config, context, &events_loop);
     let mut encoder = gfx::Encoder::from(factory.create_command_buffer());
 
@@ -161,8 +84,8 @@ pub fn main() {
             &ps.glsl_120.to_vec(),
             pipe::new()
     ).unwrap();
-    
-    let (vbuf, slice) = factory.create_vertex_buffer_with_slice(&cube_verts, cube_idx);
+    let cube = mesh::Mesh::cube();
+    let (vbuf, slice) = factory.create_vertex_buffer_with_slice(&cube.verts[..], &cube.idx[..]);
     let texels = [[0x20, 0xA0, 0xC0, 0xFF]];
     let (_, texture_view) = factory.create_texture_immutable::<gfx::format::Rgba8>(
         texture::Kind::D2(1, 1, texture::AaMode::Single), texture::Mipmap::Provided, &[&texels]
@@ -201,7 +124,7 @@ pub fn main() {
                     window.resize(width, height);
                     gfx_window_glutin::update_views(&window, &mut data.out_color, &mut data.out_depth);
                 },
-                WindowEvent::KeyboardInput{device_id, input}  => println!("Got key! {}", input.scancode),
+                WindowEvent::KeyboardInput{device_id: _, input}  => println!("Got key! {}", input.scancode),
                 _ => (),
             }
         }
